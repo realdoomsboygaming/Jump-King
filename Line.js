@@ -7,9 +7,13 @@ class DiagonalCollisionInfo {
         this.bottomSideOfPlayerCollided = false;
     }
 
-
-
-
+    reset(){
+        this.collisionPoints = []
+        this.leftSideOfPlayerCollided = false;
+        this.rightSideOfPlayerCollided = false;
+        this.topSideOfPlayerCollided = false;
+        this.bottomSideOfPlayerCollided = false;
+    }
 }
 
 class Line {

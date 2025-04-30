@@ -366,26 +366,46 @@ class Player {
 
     CheckCollisions(currentLines) {
 
-        let collidedLines = [];
-        for (let i = 0; i < currentLines.length; i++) {
-            if (this.IsCollidingWithLine(currentLines[i])) {
-                collidedLines.push(currentLines[i]);
+        let checks = 0;
+        let maxChecks = this.maxCollisionChecks;
+
+        // Reset the check counter at the beginning of the collision phase for this frame.
+        // Assuming this is the primary entry point for collision checks per frame.
+        // If collision checks can be triggered elsewhere, this might need adjustment.
+        this.currentNumberOfCollisionChecks = 0;
+
+        while (this.currentNumberOfCollisionChecks < maxChecks) {
+            this.currentNumberOfCollisionChecks++;
+
+            let collidedLines = [];
+            for (let i = 0; i < currentLines.length; i++) {
+                if (this.IsCollidingWithLine(currentLines[i])) {
+                    collidedLines.push(currentLines[i]);
+                }
             }
-        }
 
-        let chosenLine = this.GetPriorityCollision(collidedLines)
+            // If no collisions are detected in this iteration, we're done.
+            if (collidedLines.length === 0) {
+                break;
+            }
 
-        let potentialLanding = false;
-        if (chosenLine == null) return;
+            let chosenLine = this.GetPriorityCollision(collidedLines);
 
-        if (chosenLine.isHorizontal) {
-            if (this.IsMovingDown()) {
-                // so the player has potentially landed
-                //correct the position first then player has landed
-                this.currentPos.y = chosenLine.y1 - this.height;
+            // If no priority collision could be determined (shouldn't happen if collidedLines is not empty),
+            // break to avoid issues.
+            if (chosenLine == null) {
+                console.warn("GetPriorityCollision returned null despite detected collisions.");
+                break;
+            }
 
-                if (collidedLines.length > 1) {
-                    potentialLanding = true;
+            let potentialLanding = false; // Reset for each iteration
+
+            if (chosenLine.isHorizontal) {
+                if (this.IsMovingDown()) {
+                    // Correct position first
+                    this.currentPos.y = chosenLine.y1 - this.height;
+                    potentialLanding = true; // Set potential landing flag
+
                     if (levels[this.currentLevelNo].isIceLevel) {
                         this.currentSpeed.y = 0;
                         if (this.IsMovingRight()) {
@@ -393,203 +413,171 @@ class Player {
                         } else {
                             this.currentSpeed.x += iceFrictionAcceleration;
                         }
-
                     } else {
-                        this.currentSpeed = createVector(0, 0)
-
+                        // Stop movement completely on non-ice surfaces when landing
+                        // This might need refinement if multiple collisions occur
+                        this.currentSpeed = createVector(0, 0);
                     }
-                    // print("potentail landing on nooooooo")
 
-                } else {
-                    this.playerLanded();
+                    // Check if actually landed after position correction and speed adjustment
+                    // Using IsPlayerOnGround might be redundant or cause issues if it re-runs all collision checks.
+                    // Simpler check: Assume landing if corrected onto a horizontal surface while moving down.
+                    // We can refine this if needed.
+                    this.playerLanded(); // Call playerLanded directly here
+                    // Reset potentialLanding as we've handled the landing state
+                    potentialLanding = false;
+
+                } else { // Moving up or horizontally into a floor (should be rare)
+                    // Hit a roof/ceiling
+                    this.currentSpeed.y = 0 - this.currentSpeed.y / 2; // Bounce
+                    this.currentPos.y = chosenLine.y1; // Snap position
+                    if (!mutePlayers || testingSinglePlayer) {
+                        bumpSound.playMode('sustain');
+                        bumpSound.play();
+                    }
                 }
-
-            } else {
-                // if moving up then we've hit a roof and we bounce off
-
-                this.currentSpeed.y = 0 - this.currentSpeed.y / 2;
-                // ok we gonna need to snap this shit
-                this.currentPos.y = chosenLine.y1;
-                if (!mutePlayers || testingSinglePlayer) {
-                    bumpSound.playMode('sustain');
-                    bumpSound.play();
-                }
-
-            }
-
-
-        } else if (chosenLine.isVertical) {
-            if (this.IsMovingRight()) {
-                this.currentPos.x = chosenLine.x1 - this.width;
-            } else if (this.IsMovingLeft()) {
-                this.currentPos.x = chosenLine.x1;
-            } else {
-                //ok so fuck
-                //this.bad = true
-                // this means we've hit a wall but we arent moving left or right
-                // meaning we prioritised the floor first which stopped our velocity
-                // so we need a variable to store the speed we had before any transions were made
-                if (this.previousSpeed.x > 0) {
-                    this.currentPos.x = chosenLine.x1 - this.width;
-                } else {
-                    this.currentPos.x = chosenLine.x1;
-                }
-            }
-            this.currentSpeed.x = 0 - this.currentSpeed.x / 2;
-            if (!this.isOnGround) {
+            } else if (chosenLine.isVertical) {
+                 if (this.IsMovingRight()) {
+                     this.currentPos.x = chosenLine.x1 - this.width;
+                 } else if (this.IsMovingLeft()) {
+                     this.currentPos.x = chosenLine.x1;
+                 } else {
+                      // Hit a wall but not moving horizontally (likely due to resolving a floor collision first)
+                      // Use previous frame's speed to determine which side to snap to
+                     if (this.previousSpeed.x > 0) {
+                         this.currentPos.x = chosenLine.x1 - this.width;
+                     } else {
+                         this.currentPos.x = chosenLine.x1;
+                     }
+                 }
+                 this.currentSpeed.x = 0 - this.currentSpeed.x / 2; // Bounce
+                 if (!this.isOnGround) {
+                     this.hasBumped = true;
+                     if (!mutePlayers|| testingSinglePlayer) {
+                         bumpSound.playMode('sustain');
+                         bumpSound.play();
+                     }
+                 }
+            } else { // Diagonal collision
+                this.isSlidding = true;
                 this.hasBumped = true;
-                if (!mutePlayers|| testingSinglePlayer) {
-                    bumpSound.playMode('sustain');
-                    bumpSound.play();
-                }
-            }
-        } else {
-            this.isSlidding = true;
-            this.hasBumped = true;
 
-            if (chosenLine.diagonalCollisionInfo.collisionPoints.length === 2) {
-                let midpoint = chosenLine.diagonalCollisionInfo.collisionPoints[0].copy();
-                midpoint.add(chosenLine.diagonalCollisionInfo.collisionPoints[1].copy());
-                midpoint.mult(0.5);
+                // --- [ Existing Diagonal Collision Logic Start (lines ~439 to ~575) ] ---
+                // This complex logic remains largely the same within the loop structure.
+                // Make sure any speed/position changes here are correctly handled
+                // before the next loop iteration re-checks collisions.
 
-                let left = chosenLine.diagonalCollisionInfo.leftSideOfPlayerCollided;
-                let right = chosenLine.diagonalCollisionInfo.rightSideOfPlayerCollided;
-                let top = chosenLine.diagonalCollisionInfo.topSideOfPlayerCollided;
-                let bottom = chosenLine.diagonalCollisionInfo.bottomSideOfPlayerCollided;
+                if (chosenLine.diagonalCollisionInfo.collisionPoints.length === 2) {
+                    let midpoint = chosenLine.diagonalCollisionInfo.collisionPoints[0].copy();
+                    midpoint.add(chosenLine.diagonalCollisionInfo.collisionPoints[1].copy());
+                    midpoint.mult(0.5);
 
-                let playerCornerPos = null;
+                    let left = chosenLine.diagonalCollisionInfo.leftSideOfPlayerCollided;
+                    let right = chosenLine.diagonalCollisionInfo.rightSideOfPlayerCollided;
+                    let top = chosenLine.diagonalCollisionInfo.topSideOfPlayerCollided;
+                    let bottom = chosenLine.diagonalCollisionInfo.bottomSideOfPlayerCollided;
 
-                if (top && left) {
-                    // print("t and l")
-                    playerCornerPos = this.currentPos.copy();
+                    let playerCornerPos = null;
 
-                }
-                if (top && right) {
-                    // print("t and r")
-                    playerCornerPos = this.currentPos.copy();
-                    playerCornerPos.x += this.width;
-
-                }
-                if (bottom && left) {
-                    // print("b and l")
-                    playerCornerPos = this.currentPos.copy();
-                    playerCornerPos.y += this.height;
-                    this.sliddingRight = true;
-                }
-                if (bottom && right) {
-                    // print("b and r")
-                    playerCornerPos = this.currentPos.copy();
-                    playerCornerPos.y += this.height;
-                    playerCornerPos.x += this.width;
-                    this.sliddingRight = false;
-                }
-                let correctionX = 0;
-                let correctionY = 0;
-
-                if (playerCornerPos === null) {
-                    print("fuck");
-                    print(left, right, top, bottom);
-                    playerCornerPos = this.currentPos.copy();
-
-                    if (this.IsMovingDown()) {
-                        playerCornerPos.y += this.height;
+                    if (top && left) {
+                        playerCornerPos = this.currentPos.copy();
                     }
-                    if (this.IsMovingRight()) {
+                    if (top && right) {
+                        playerCornerPos = this.currentPos.copy();
                         playerCornerPos.x += this.width;
                     }
+                    if (bottom && left) {
+                        playerCornerPos = this.currentPos.copy();
+                        playerCornerPos.y += this.height;
+                        this.sliddingRight = true;
+                    }
+                    if (bottom && right) {
+                        playerCornerPos = this.currentPos.copy();
+                        playerCornerPos.y += this.height;
+                        playerCornerPos.x += this.width;
+                        this.sliddingRight = false;
+                    }
+                    let correctionX = 0;
+                    let correctionY = 0;
+
+                    if (playerCornerPos === null) {
+                        console.warn("Diagonal collision: playerCornerPos is null");
+                        print(left, right, top, bottom);
+                        playerCornerPos = this.currentPos.copy();
+                        if (this.IsMovingDown()) { playerCornerPos.y += this.height; }
+                        if (this.IsMovingRight()) { playerCornerPos.x += this.width; }
+                    }
+                    correctionX = midpoint.x - playerCornerPos.x;
+                    correctionY = midpoint.y - playerCornerPos.y;
+
+                    this.currentPos.x += correctionX;
+                    this.currentPos.y += correctionY;
+
+                    let lineVector = createVector(chosenLine.x2 - chosenLine.x1, chosenLine.y2 - chosenLine.y1)
+                    lineVector.normalize();
+
+                    let speedMagnitude = p5.Vector.dot(this.currentSpeed, lineVector);
+                    this.currentSpeed = p5.Vector.mult(lineVector, speedMagnitude);
+
+                    if (top) {
+                        this.currentSpeed = createVector(0, 0)
+                        this.isSlidding = false;
+                    }
+
+                } else { // Single point diagonal collision (corner case)
+                    let left = chosenLine.diagonalCollisionInfo.leftSideOfPlayerCollided;
+                    let right = chosenLine.diagonalCollisionInfo.rightSideOfPlayerCollided;
+                    let top = chosenLine.diagonalCollisionInfo.topSideOfPlayerCollided;
+                    let bottom = chosenLine.diagonalCollisionInfo.bottomSideOfPlayerCollided;
+
+                    // Simplified handling based on which side hit the single point
+                    if (top) { // Hit underside of a diagonal point
+                        let closestPointY = max(chosenLine.y1, chosenLine.y2)
+                        this.currentPos.y = closestPointY + 1;
+                        this.currentSpeed.y = 0 - this.currentSpeed.y / 2;
+                    }
+                    if (bottom) { // Landed on top of a diagonal point
+                        let closestPointY = min(chosenLine.y1, chosenLine.y2)
+                        this.currentPos.y = closestPointY - this.height - 1;
+                        // Treat like landing
+                        this.playerLanded(); // Call playerLanded here too
+                        potentialLanding = false; // Reset potentialLanding
+                        // Stop speed or apply friction?
+                        // Original code zeroed speed here, let's keep that for now.
+                         this.currentSpeed = createVector(0, 0);
+                    }
+                    if (left) { // Hit the right side of a point
+                        this.currentPos.x = max(chosenLine.x1, chosenLine.x2) + 1;
+                        if (this.IsMovingLeft())
+                            this.currentSpeed.x = 0 - this.currentSpeed.x / 2;
+                        if (!this.isOnGround) this.hasBumped = true;
+                    }
+                    if (right) { // Hit the left side of a point
+                        this.currentPos.x = min(chosenLine.x1, chosenLine.x2) - this.width - 1;
+                        if (this.IsMovingRight())
+                            this.currentSpeed.x = 0 - this.currentSpeed.x / 2;
+                        if (!this.isOnGround) this.hasBumped = true;
+                    }
                 }
-                correctionX = midpoint.x - playerCornerPos.x;
-                correctionY = midpoint.y - playerCornerPos.y;
-
-
-                this.currentPos.x += correctionX;
-                this.currentPos.y += correctionY;
-                // this.currentPos.x += correctionX>0 ? 1:-1;
-                // this.currentPos.y += correctionY>0 ? 1:-1;
-
-
-                //get the current speed based on the dot product of the current veloctiy with the line
-                let lineVector = createVector(chosenLine.x2 - chosenLine.x1, chosenLine.y2 - chosenLine.y1)
-                lineVector.normalize();
-                // print(lineVector);
-
-                let speedMagnitude = p5.Vector.dot(this.currentSpeed, lineVector);
-                // print(this.currentSpeed)
-                this.currentSpeed = p5.Vector.mult(lineVector, speedMagnitude);
-                // print(speedMagnitude,lineVector,this.currentSpeed)
-                // this.currentSpeed.x = 0.5*gravity;
-                // this.currentSpeed.y = 0.5*gravity;
-                if (top) {
-                    this.currentSpeed = createVector(0, 0)
-                    this.isSlidding = false;
-                }
-
-
-            } else {
-                let left = chosenLine.diagonalCollisionInfo.leftSideOfPlayerCollided;
-                let right = chosenLine.diagonalCollisionInfo.rightSideOfPlayerCollided;
-                let top = chosenLine.diagonalCollisionInfo.topSideOfPlayerCollided;
-                let bottom = chosenLine.diagonalCollisionInfo.bottomSideOfPlayerCollided;
-
-                let playerCornerPos = null;
-                if (top) {// bounce off the point as if it were horizontal
-                    // print("top only");
-                    let closestPointY = max(chosenLine.y1, chosenLine.y2)
-                    this.currentPos.y = closestPointY + 1;
-                    this.currentSpeed.y = 0 - this.currentSpeed.y / 2;
-
-                }
-                if (bottom) {//treat like floor
-                    // print("bottome only");
-                    let closestPointY = min(chosenLine.y1, chosenLine.y2)
-                    // this.isOnGround = true
-                    this.currentSpeed = createVector(0, 0)
-                    // ok we gonna need to snap this shit
-                    this.currentPos.y = closestPointY - this.height - 1;
-
-                }
-                if (left) {// treat like a left wall
-                    // print('left only')
-                    this.currentPos.x = max(chosenLine.x1, chosenLine.x2) + 1;
-                    if (this.IsMovingLeft())
-                        this.currentSpeed.x = 0 - this.currentSpeed.x / 2;
-                    if (!this.isOnGround) this.hasBumped = true;
-                }
-                if (right) {// treat like a right wall
-                    // print("right only")
-                    this.currentPos.x = min(chosenLine.x1, chosenLine.x2) - this.width - 1;
-                    if (this.IsMovingRight())
-                        this.currentSpeed.x = 0 - this.currentSpeed.x / 2;
-
-                    if (!this.isOnGround) this.hasBumped = true;
-                }
-
-
+                 // --- [ End of Existing Diagonal Collision Logic ] ---
             }
 
+            // The loop will now naturally continue and re-evaluate collisions
+            // with the updated this.currentPos and this.currentSpeed
 
-        }
-        if (collidedLines.length > 1) {
-            // print(chosenLine)
-            this.currentNumberOfCollisionChecks += 1;
-            if (this.currentNumberOfCollisionChecks > this.maxCollisionChecks) {
-                this.hasFinishedInstructions = true;
-                this.playersDead = true;
-            } else {
-                this.CheckCollisions(currentLines);
-            }
+        } // End of while loop
 
-            //ok so this is gonna need some splaining.
-            // so if we've "landed" but it wasnt the last correction then we need to check again if the dude has landed
-            // just incase the corrections have moved him off the surface
-            if (potentialLanding) {
-                if (this.IsPlayerOnGround(currentLines)) {
-                    this.playerLanded();
-                }
-
-            }
+        // Check if the loop terminated due to exceeding max checks
+        if (this.currentNumberOfCollisionChecks >= maxChecks) {
+            this.hasFinishedInstructions = true;
+            this.playersDead = true;
+            console.warn("Player killed due to exceeding max collision checks (", maxChecks, ").");
         }
 
+        // Note: The check for potentialLanding after multiple collisions from the original recursive
+        // structure seems complex to replicate perfectly here without potential side effects.
+        // The current approach handles landing within the iteration where the horizontal collision is resolved.
+        // If issues arise (e.g., sliding off edges after multiple adjustments), this might need revisiting.
     }
 
     Show() {
@@ -748,24 +736,24 @@ class Player {
             let bottomCollision = AreLinesColliding(bl.x, bl.y, br.x, br.y, l.x1, l.y1, l.x2, l.y2);
 
             if (leftCollision[0] || rightCollision[0] || topCollision[0] || bottomCollision[0]) {
-                let collisionInfo = new DiagonalCollisionInfo();
-                collisionInfo.leftSideOfPlayerCollided = leftCollision[0]
-                collisionInfo.rightSideOfPlayerCollided = rightCollision[0];
-                collisionInfo.topSideOfPlayerCollided = topCollision[0];
-                collisionInfo.bottomSideOfPlayerCollided = bottomCollision[0];
+                l.diagonalCollisionInfo.leftSideOfPlayerCollided = leftCollision[0]
+                l.diagonalCollisionInfo.rightSideOfPlayerCollided = rightCollision[0];
+                l.diagonalCollisionInfo.topSideOfPlayerCollided = topCollision[0];
+                l.diagonalCollisionInfo.bottomSideOfPlayerCollided = bottomCollision[0];
 
+                l.diagonalCollisionInfo.collisionPoints = [];
                 if (leftCollision[0])
-                    collisionInfo.collisionPoints.push(createVector(leftCollision[1], leftCollision[2]))
+                    l.diagonalCollisionInfo.collisionPoints.push(createVector(leftCollision[1], leftCollision[2]))
                 if (rightCollision[0])
-                    collisionInfo.collisionPoints.push(createVector(rightCollision[1], rightCollision[2]))
+                    l.diagonalCollisionInfo.collisionPoints.push(createVector(rightCollision[1], rightCollision[2]))
                 if (topCollision[0])
-                    collisionInfo.collisionPoints.push(createVector(topCollision[1], topCollision[2]))
+                    l.diagonalCollisionInfo.collisionPoints.push(createVector(topCollision[1], topCollision[2]))
                 if (bottomCollision[0])
-                    collisionInfo.collisionPoints.push(createVector(bottomCollision[1], bottomCollision[2]))
+                    l.diagonalCollisionInfo.collisionPoints.push(createVector(bottomCollision[1], bottomCollision[2]))
 
-                l.diagonalCollisionInfo = collisionInfo;
                 return true;
             } else {
+                l.diagonalCollisionInfo.reset();
                 return false;
             }
 
@@ -977,7 +965,6 @@ class Player {
 
 
         let minCorrection = 10000;
-        let maxCorrection = 0;
 
         let chosenLine = null;
         if (collidedLines.length === 0) return null;

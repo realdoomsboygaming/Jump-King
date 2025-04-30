@@ -355,9 +355,6 @@ function mouseClicked() {
         player.currentPos = createVector(mouseX, mouseY);
 
 
-    } else if (placingCoins) {
-
-
     }
     print("levels[" + player.currentLevelNo + "].coins.push(new Coin( " + floor(mouseX) + "," + floor(mouseY - 50) + ' , "progress" ));');
 }
